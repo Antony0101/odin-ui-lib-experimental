@@ -9,7 +9,7 @@ GeneratorContext :: struct {
 generatorContext: GeneratorContext
 
 begin_ui :: proc(){
-    // generatorContext.root
+    generatorContext.root
 }
 
 begin_c :: proc(c_type: CONTENT_TYPE, c_data: rawptr) -> ^UI_NODE {

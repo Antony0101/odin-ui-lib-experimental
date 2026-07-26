@@ -1,5 +1,6 @@
 package UiKitPrimitive
 
+import types "../../types"
 import state "../state"
 import style "../style"
 import "core:fmt"
@@ -30,16 +31,11 @@ content_rect
 for width and height we will currently only do border box
 */
 
-Content :: union #no_nil {
-	string,
-	cstring,
-	rl.Texture,
-}
-
-Pass :: enum {
-	Layout,
-	Paint,
-}
+// Content :: union #no_nil {
+// 	string,
+// 	cstring,
+// 	rl.Texture,
+// }
 
 @(private = "file")
 Return :: struct {
@@ -52,21 +48,29 @@ Return :: struct {
 Style :: style.Style_Param
 
 
-Element :: proc(
-	id: state.Cid,
-	pos: [2]f32,
-	content: Content,
-	mousePointer: rl.Vector2,
-	uiState: ^state.UIState = nil,
-	pass: Pass = Pass.Paint,
-	style_str: string,
-	debug_border: bool = false,
-) -> Return {
-	style_param := style.parse_style_string(style_str)
+ElementLayout: types.PrimitiveLayoutProc : proc(
+	id: types.Cid,
+	node: ^types.UI_NODE,
+	content: ^types.UI_NODE,
+	uiState: ^types.UIState = nil,
+) -> types.PrimitiveLayoutResult {
+	if node == nil {
+		panic("ElementLayout: node cannot be nil")
+	}
+	if node.type != .primitive {
+		panic("ElementLayout: node type must be primitive")
+	}
+	if content == nil {
+		panic("ElementLayout: content cannot be nil")
+	}
+	if content.type != .content {
+		panic("ElementLayout: content type must be content")
+	}
+	style_param := style.parse_style_string(node.style)
 	defer delete(style_param)
 
 	fontSize := f32(25)
-	result: Return
+	result: types.PrimitiveLayoutResult
 	uiState := uiState
 	if (uiState == nil) {
 		uiState = &state.uiState
@@ -98,7 +102,7 @@ Element :: proc(
 	// layout calculation - all box model rectangle will be calculated
 
 	// container rect position - (main invisible reactangle with margin and everything)
-	container_pos := pos
+	container_pos := rl.Vector2{100, 100}
 
 	// border rect position
 	border_pos := rl.Vector2{container_pos.x + ml, container_pos.y + mt}
@@ -108,13 +112,11 @@ Element :: proc(
 
 	// content rect width height
 	content_wh: rl.Vector2
-	switch val in content {
-	case string:
-		cs := strings.clone_to_cstring(val, context.allocator)
-		content_wh = rl.MeasureTextEx(state.font, cs, fontSize, 2)
-	case cstring:
-		content_wh = rl.MeasureTextEx(state.font, val, fontSize, 2)
-	case rl.Texture:
+	switch content.c_type {
+	case .text:
+		content_wh = rl.MeasureTextEx(state.font, cast(cstring)content.c_data, fontSize, 2)
+	case .texture:
+		val := cast(^rl.Texture)content.c_data
 		content_wh = rl.Vector2{f32(val.width), f32(val.height)}
 	}
 
@@ -140,7 +142,22 @@ Element :: proc(
 	result.content_rect = content_rect
 	result.container_rect = container_rect
 
-	if (pass == .Layout) do return result
+	fmt.println("ddd", result)
+	return result
+}
+
+ElementInput :: proc(
+	id: types.Cid,
+	mousePointer: rl.Vector2,
+	node: ^types.UI_Tree_Node,
+	uiState: ^types.UIState = nil,
+) -> Return {
+	result: Return
+	uiState := uiState
+	if (uiState == nil) {
+		uiState = &state.uiState
+	}
+
 
 	// paint Phase
 	result.isClicked = false
@@ -158,7 +175,8 @@ Element :: proc(
 		// TODO(vimal): The clicked outside case need to done in the frame loop itself at the starting of the loop check its feasiblity
 		uiState.focus = id
 	}
-	if rl.CheckCollisionPointRec(mousePointer, border_rect) && uiState.active == state.CidEmpty {
+	if rl.CheckCollisionPointRec(mousePointer, node.layout.border_box) &&
+	   uiState.active == state.CidEmpty {
 		uiState.hover = id
 	} else {
 		if uiState.hover == id do uiState.hover = state.CidEmpty
@@ -166,32 +184,75 @@ Element :: proc(
 			uiState.focus = state.CidEmpty
 		}
 	}
+	return result
+}
+
+ElementDraw: types.PrimitiveDrawProc : proc(
+	id: types.Cid,
+	node: ^types.UI_Tree_Node,
+	content: ^types.UI_NODE,
+	uiState: ^types.UIState = nil,
+	debug_border: bool = false,
+) {
+	style_param := style.parse_style_string(node.node.style)
+	defer delete(style_param)
+
+	fontSize := f32(25)
+	uiState := uiState
+	if (uiState == nil) {
+		uiState = &state.uiState
+	}
+	// style struct
+	isHover := uiState.hover == id
+	isFocus := uiState.focus == id
+	isActive := uiState.active == id
+	st := style.generate_style_struct(style_param, isHover, isFocus, isActive)
+	defer free(st)
+
+	pl := st.pl.? or_else f32(0)
+	pr := st.pr.? or_else f32(0)
+	pb := st.pb.? or_else f32(0)
+	pt := st.pt.? or_else f32(0)
+	ml := st.mr.? or_else f32(0)
+	mr := st.mr.? or_else f32(0)
+	mb := st.mb.? or_else f32(0)
+	mt := st.mt.? or_else f32(0)
+	h := st.h.? or_else f32(0)
+	w := st.w.? or_else f32(0)
+	bg_color := st.bg_color.? or_else rl.WHITE
+	text_color := st.text_color.? or_else rl.BLACK
+	text_size := st.text_size.? or_else f32(10)
+	border_color := st.border_color.? or_else rl.BLACK
+	border_width := st.border_width.? or_else f32(1)
+
+	// fmt.println("ddd", node.layout)
 
 	// painting the screen
 	if debug_border {
-		rl.DrawRectangleLinesEx(container_rect, 1, rl.RED)
+		rl.DrawRectangleLinesEx(node.layout.container_box, 1, rl.RED)
 	}
-	rl.DrawRectangleRec(border_rect, bg_color)
+	rl.DrawRectangleRec(node.layout.border_box, bg_color)
 	if border_width > 0 {
-		rl.DrawRectangleLinesEx(border_rect, border_width, border_color)
+		rl.DrawRectangleLinesEx(node.layout.border_box, border_width, border_color)
 	}
-	// if uiState.hover == id {
-	// 	// rl.DrawRectangleRec(button_rec, style.hover)
-	// } else {
-	// 	// rl.DrawRectangleRec(button_rec, style.backgroundColour)
-	// 	rl.DrawRectangleRec(button_rec, rl.GREEN)
-	// }
-	// // rl.DrawRectangleLinesEx(button_rec, 2, style.borderColour)
-	// rl.DrawRectangleLinesEx(button_rec, 2, rl.BLACK)
-	switch val in content {
-	case string:
-		cs := strings.clone_to_cstring(val, context.allocator)
-		rl.DrawTextEx(state.font, cs, content_pos, fontSize, 2, rl.RED)
-	// rl.DrawTextEx(state.font, cs, content_pos, fontSize, 2, style.fontColour)
-	case cstring:
-		rl.DrawTextEx(state.font, val, content_pos, fontSize, 2, rl.RED)
-	case rl.Texture:
-		rl.DrawTextureEx(val, content_pos, 0, 1, rl.WHITE)
+	switch content.c_type {
+	case .text:
+		rl.DrawTextEx(
+			state.font,
+			cast(cstring)content.c_data,
+			rl.Vector2{node.layout.content_box.x, node.layout.content_box.y},
+			fontSize,
+			2,
+			rl.RED,
+		)
+	case .texture:
+		rl.DrawTextureEx(
+			(cast(^rl.Texture)content.c_data)^,
+			rl.Vector2{node.layout.content_box.x, node.layout.content_box.y},
+			0,
+			1,
+			rl.WHITE,
+		)
+
 	}
-	return result
 }
